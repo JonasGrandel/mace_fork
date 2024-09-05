@@ -713,6 +713,7 @@ def run(args: argparse.Namespace) -> None:
         max_num_epochs=args.max_num_epochs,
         logger=logger,
         patience=args.patience,
+        convergence_stop=0.0005,        #TODO als input einsetzbar machen
         save_all_checkpoints=args.save_all_checkpoints,
         output_args=output_args,
         device=device,

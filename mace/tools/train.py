@@ -133,6 +133,7 @@ def train(
     start_epoch: int,
     max_num_epochs: int,
     patience: int,
+    convergence_stop: float,
     checkpoint_handler: CheckpointHandler,
     logger: MetricsLogger,
     eval_interval: int,
