@@ -9,6 +9,16 @@ import torch
 from mace.tools import TensorDict
 from mace.tools.torch_geometric import Batch
 
+def compute_angle(s, t, n1=None, n2=None, epsilon=1e-8):
+    if n1 is None:
+        n1 = torch.norm(s, dim=1)
+    if n2 is None:
+        n2 = torch.norm(t, dim=1)
+    # Compute dot product between force vectors
+    dp = torch.einsum('ij,ij->i', s, t)
+    # Compute angle
+    return torch.arccos((dp + epsilon) / (n1*n2 + epsilon))
+
 
 def mean_squared_error_energy(ref: Batch, pred: TensorDict) -> torch.Tensor:
     # energy: [n_graphs, ]
@@ -27,6 +37,18 @@ def weighted_mean_squared_error_energy(ref: Batch, pred: TensorDict) -> torch.Te
     )  # []
 
 
+def weighted_mean_absolute_error_energy(ref: Batch, pred: TensorDict) -> torch.Tensor:
+    # energy: [n_graphs, ]
+    configs_weight = ref.weight  # [n_graphs, ]
+    configs_energy_weight = ref.energy_weight  # [n_graphs, ]
+    num_atoms = ref.ptr[1:] - ref.ptr[:-1]  # [n_graphs,]
+    return torch.mean(
+        configs_weight
+        * configs_energy_weight
+        * torch.abs((ref["energy"] - pred["energy"]) / num_atoms)
+    )  # []
+
+
 def weighted_mean_squared_stress(ref: Batch, pred: TensorDict) -> torch.Tensor:
     # energy: [n_graphs, ]
     configs_weight = ref.weight.view(-1, 1, 1)  # [n_graphs, ]
@@ -35,6 +57,18 @@ def weighted_mean_squared_stress(ref: Batch, pred: TensorDict) -> torch.Tensor:
         configs_weight
         * configs_stress_weight
         * torch.square(ref["stress"] - pred["stress"])
+    )  # []
+
+
+def weighted_mean_absolute_stress(ref: Batch, pred: TensorDict) -> torch.Tensor:
+    # energy: [n_graphs, ]
+    configs_weight = ref.weight.view(-1, 1, 1)  # [n_graphs, ]
+    configs_stress_weight = ref.stress_weight.view(-1, 1, 1)  # [n_graphs, ]
+    num_atoms = (ref.ptr[1:] - ref.ptr[:-1]).view(-1, 1, 1)  # [n_graphs,]
+    return torch.mean(
+        configs_weight
+        * configs_stress_weight
+        * torch.abs((ref["stress"] - pred["stress"]) / num_atoms)
     )  # []
 
 
@@ -67,6 +101,33 @@ def mean_squared_error_forces(ref: Batch, pred: TensorDict) -> torch.Tensor:
         * configs_forces_weight
         * torch.square(ref["forces"] - pred["forces"])
     )  # []
+
+
+def angle_norm_error_forces(ref: Batch, pred: TensorDict, angle_weight: float) -> torch.Tensor:
+    # forces: [n_atoms, 3]
+    configs_weight = torch.repeat_interleave(
+        ref.weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(
+        -1
+    )  # [n_atoms, 1]
+    configs_forces_weight = torch.repeat_interleave(
+        ref.forces_weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(
+        -1
+    )  # [n_atoms, 1]
+    # Compute norms
+    n1 = torch.norm(ref ["forces"], dim=1)
+    n2 = torch.norm(pred["forces"], dim=1)
+    # Compute angle
+    angle = compute_angle(ref["forces"], pred["forces"], n1=n1, n2=n2)
+    # Compute loss
+    return torch.mean(
+        configs_weight
+        * configs_forces_weight
+        * (torch.abs(n1 - n2) + angle_weight*angle)
+    )  # []
+
+
 
 
 def weighted_mean_squared_error_dipole(ref: Batch, pred: TensorDict) -> torch.Tensor:
@@ -171,6 +232,34 @@ class WeightedEnergyForcesLoss(torch.nn.Module):
         )
 
 
+class AngleEnergyForcesLossL1(torch.nn.Module):
+    def __init__(self, energy_weight=1.0, forces_weight=1.0, angle_weight=1.0) -> None:
+        super().__init__()
+        self.register_buffer(
+            "energy_weight",
+            torch.tensor(energy_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "forces_weight",
+            torch.tensor(forces_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "angle_weight",
+            torch.tensor(angle_weight, dtype=torch.get_default_dtype()),
+        )
+    def forward(self, ref: Batch, pred: TensorDict) -> torch.Tensor:
+        return self.energy_weight * weighted_mean_squared_error_energy(
+            ref, pred
+        ) + self.forces_weight * angle_norm_error_forces(ref, pred, self.angle_weight)
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}"
+            f"(energy_weight={self.energy_weight:.3f}, "
+            f"forces_weight={self.forces_weight:.3f}, "
+            f"angle_weight={self.angle_weight:.3f})"
+        )
+
+
 class WeightedForcesLoss(torch.nn.Module):
     def __init__(self, forces_weight=1.0) -> None:
         super().__init__()
@@ -250,6 +339,52 @@ class WeightedHuberEnergyForcesStressLoss(torch.nn.Module):
             f"forces_weight={self.forces_weight:.3f}, stress_weight={self.stress_weight:.3f})"
         )
 
+class WeightedHuberEnergyForcesStressAngleLoss(torch.nn.Module):
+    def __init__(
+        self, energy_weight=1.0, forces_weight=1.0, stress_weight=1.0, angle_weight=1.0, huber_delta=0.01
+    ) -> None:
+        super().__init__()
+        self.huber_loss = torch.nn.HuberLoss(reduction="mean", delta=huber_delta)
+        self.register_buffer(
+            "energy_weight",
+            torch.tensor(energy_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "forces_weight",
+            torch.tensor(forces_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "stress_weight",
+            torch.tensor(stress_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "angle_weight",
+            torch.tensor(angle_weight, dtype=torch.get_default_dtype()),
+        )
+
+    def forward(self, ref: Batch, pred: TensorDict) -> torch.Tensor:
+        num_atoms = ref.ptr[1:] - ref.ptr[:-1]
+        n1 = torch.norm(ref ["forces"], dim=1)  #compute norm n1
+        n2 = torch.norm(pred["forces"], dim=1)  #compute norm n2
+        angle = compute_angle(ref["forces"], pred["forces"], n1=n1, n2=n2)  #compute angle
+
+        expanded_angles, expanded_zeros = torch.broadcast_tensors(angle, torch.zeros_like(angle))
+        return (
+            self.energy_weight
+            * self.huber_loss(ref["energy"] / num_atoms, pred["energy"] / num_atoms)
+            + self.forces_weight * self.huber_loss(ref["forces"], pred["forces"])
+            + self.stress_weight * self.huber_loss(ref["stress"], pred["stress"])
+            + self.angle_weight * self.huber_loss(angle, torch.zeros_like(angle))
+        )
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(energy_weight={self.energy_weight:.3f}, "
+            f"forces_weight={self.forces_weight:.3f}, " 
+            f"stress_weight={self.stress_weight:.3f}, "
+            f"angle_weight={self.angle_weight:.3f})"
+        )
+    
 
 class UniversalLoss(torch.nn.Module):
     def __init__(

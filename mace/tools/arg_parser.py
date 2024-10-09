@@ -376,17 +376,22 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         choices=[
             "ef",
             "weighted",
+            "angle-l1",
             "forces_only",
             "virials",
             "stress",
             "dipole",
             "huber",
+            "huber_angle",
             "universal",
             "energy_forces_dipole",
         ],
     )
     parser.add_argument(
         "--forces_weight", help="weight of forces loss", type=float, default=100.0
+    )
+    parser.add_argument(
+        "--angle_weight", help="weight of angle error between force vectors", type=float, default=1.0
     )
     parser.add_argument(
         "--swa_forces_weight",

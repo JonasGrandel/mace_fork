@@ -293,6 +293,12 @@ def run(args: argparse.Namespace) -> None:
         )
     elif args.loss == "forces_only":
         loss_fn = modules.WeightedForcesLoss(forces_weight=args.forces_weight)
+    elif args.loss == "angle-l1":
+        loss_fn = modules.AngleEnergyForcesLossL1(
+            energy_weight=args.energy_weight,
+            forces_weight=args.forces_weight,
+            angle_weight=args.angle_weight,
+        )
     elif args.loss == "virials":
         loss_fn = modules.WeightedEnergyForcesVirialsLoss(
             energy_weight=args.energy_weight,
@@ -310,6 +316,14 @@ def run(args: argparse.Namespace) -> None:
             energy_weight=args.energy_weight,
             forces_weight=args.forces_weight,
             stress_weight=args.stress_weight,
+            huber_delta=args.huber_delta,
+        )
+    elif args.loss == "huber_angle":
+        loss_fn = modules.WeightedHuberEnergyForcesStressAngleLoss(
+            energy_weight=args.energy_weight,
+            forces_weight=args.forces_weight,
+            stress_weight=args.stress_weight,
+            angle_weight=args.angle_weight,
             huber_delta=args.huber_delta,
         )
     elif args.loss == "universal":
@@ -354,7 +368,7 @@ def run(args: argparse.Namespace) -> None:
 
     # Selecting outputs
     compute_virials = False
-    if args.loss in ("stress", "virials", "huber", "universal"):
+    if args.loss in ("stress", "virials", "huber", "huber_angle", "universal"):
         compute_virials = True
         args.compute_stress = True
         if "MAE" in args.error_table:

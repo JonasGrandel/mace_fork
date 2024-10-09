@@ -327,6 +327,7 @@ def get_loss_fn(
     loss: str,
     energy_weight: float,
     forces_weight: float,
+    angle_weight: float,
     stress_weight: float,
     virials_weight: float,
     dipole_weight: float,
@@ -336,6 +337,25 @@ def get_loss_fn(
     if loss == "weighted":
         loss_fn = modules.WeightedEnergyForcesLoss(
             energy_weight=energy_weight, forces_weight=forces_weight
+        )
+    elif loss == "angle-l1":
+        loss_fn = modules.AngleEnergyForcesLossL1(
+            energy_weight=energy_weight,
+            forces_weight=forces_weight, 
+            angle_weight=angle_weight
+        )
+    elif loss == "huber_angle":
+        loss_fn = modules.WeightedHuberEnergyForcesStressAngleLoss(
+            energy_weight=energy_weight,
+            forces_weight=forces_weight,
+            stress_weight=stress_weight,
+            angle_weight=angle_weight,
+        )
+    elif loss == "huber":
+        loss_fn = modules.WeightedHuberEnergyForcesStressLoss(
+            energy_weight=energy_weight,
+            forces_weight=forces_weight,
+            stress_weight=stress_weight,
         )
     elif loss == "forces_only":
         loss_fn = modules.WeightedForcesLoss(forces_weight=forces_weight)
